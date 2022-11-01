@@ -1,0 +1,138 @@
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+
+# STEP 1. COLLECT DATA
+#=====================
+# Upload Divvy datasets (csv files)
+q3_2019 <- read.csv("CSV/Divvy_Trips_2019_Q3/Divvy_Trips_2019_Q3.csv")
+q4_2019 <- read.csv("CSV/Divvy_Trips_2019_Q4/Divvy_Trips_2019_Q4.csv")
+q1_2020 <- read.csv("CSV/Divvy_Trips_2020_Q1/Divvy_Trips_2020_Q1.csv")
+
+#STEP 2. ARRANGE DATA
+#====================
+#Make column names uniform so files can be joined
+colnames(q3_2019)
+colnames(q4_2019)
+colnames(q1_2020)
+#Rename columns from q4_2019 and q3_2019 to match q1_2020
+(q4_2019<-rename(q4_2019
+                 ,ride_id=trip_id
+                 ,rideable_type=bikeid
+                 ,started_at=start_time
+                 ,ended_at=end_time
+                 ,start_station_name=from_station_name
+                 ,start_station_id=from_station_id
+                 ,end_station_name=to_station_name
+                 ,end_station_id=to_station_id
+                 ,member_casual=usertype))
+(q3_2019<-rename(q3_2019
+                 ,ride_id=trip_id
+                 ,rideable_type=bikeid
+                 ,started_at=start_time
+                 ,ended_at=end_time
+                 ,start_station_name=from_station_name
+                 ,start_station_id=from_station_id
+                 ,end_station_name=to_station_name
+                 ,end_station_id=to_station_id
+                 ,member_casual=usertype))
+#Check for inconsistencies
+str(q3_2019)
+str(q4_2019)
+str(q1_2020)
+
+#Convert corresponding rows to same datatype
+q4_2019 <-  mutate(q4_2019, ride_id = as.character(ride_id)
+                   ,rideable_type = as.character(rideable_type)) 
+q3_2019 <-  mutate(q3_2019, ride_id = as.character(ride_id)
+                   ,rideable_type = as.character(rideable_type))
+
+#Combine all the data_frames into a single one
+all_trips <- bind_rows(q3_2019, q4_2019, q1_2020)
+
+#Remove unwanted columns from all_trips
+all_trips <- all_trips %>%  
+  select(-c(start_lat,
+           start_lng,
+           end_lat,
+           end_lng,
+           birthyear,
+           gender))
+
+# STEP 3: FINAL CLEAN-UP AND PREPARATION FOR ANALYSIS
+#======================================================
+# Inspect the all_trips table
+colnames(all_trips) #Check the fields
+nrow(all_trips) #Must be equal to sum of observations of q3_2019, q4_2019 and q1_2020
+dim(all_trips) #Check the dimensions, i.e. rows and columns
+head(all_trips) #Check the first 6 rows of all_trips
+str(all_trips) #Check the structure, i.e. data types of the various fields
+summary(all_trips) #Statistical summary
+
+#Make member_casual field data uniform
+all_trips <-  all_trips %>% 
+  mutate(member_casual = recode(member_casual
+                                ,"Subscriber" = "member"
+                                ,"Customer" = "casual"))
+#Create a column for day of the week
+all_trips$day_of_week <- format(as.Date(all_trips$started_at), "%A")
+
+#Make sure trip_duration column is filled out for all entries
+all_trips$tripduration <- difftime(all_trips$ended_at,all_trips$started_at)
+all_trips<- mutate(all_trips, tripduration = as.numeric(tripduration))
+
+#Removing entries where the bikes were taken to HQ or tripduration is negative
+#Adding data to another data_frame since entries are being deleted
+all_trips_v2 <- all_trips[!(all_trips$start_station_name == "HQ QR" | all_trips$tripduration < 0),]
+
+#STEP 4: ANALAYSING IN DEPTH
+#===========================
+
+#Basic statistics of the data by tripduration
+summary(all_trips_v2$tripduration)
+
+#Arrange the days of the week
+all_trips_v2$day_of_week <- ordered(all_trips_v2$day_of_week, levels=c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+#Compare average ride time of members and casuals by dy of week
+aggregate(all_trips_v2$tripduration ~ all_trips_v2$member_casual + all_trips_v2$day_of_week, FUN = mean)
+
+# Analyzing rider data by type and weekday
+all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>%  #creates weekday field using wday()
+  group_by(member_casual, weekday) %>%  #groups by usertype and weekday
+  summarise(number_of_rides = n()				#calculates the number of rides and average duration 
+            ,average_duration = mean(tripduration)) %>% 	# calculates the average duration
+  arrange(member_casual, weekday)	
+
+#Number of casuals vs members
+ggplot(all_trips_v2, aes(member_casual, fill=member_casual)) +
+  geom_bar() +
+  labs(x="Casuals x Members", title="Chart 01 - Casuals x Members distribution")
+
+# Visualizing number of rides by type
+all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(tripduration)) %>% 
+  arrange(member_casual, weekday)  %>% 
+  ggplot(aes(x = weekday, y = number_of_rides, fill = member_casual)) +
+  geom_col(position = "dodge")
+
+# Visualizing average duration by type of rider
+all_trips_v2 %>% 
+  mutate(weekday = wday(started_at, label = TRUE)) %>% 
+  group_by(member_casual, weekday) %>% 
+  summarise(number_of_rides = n()
+            ,average_duration = mean(tripduration)) %>% 
+  arrange(member_casual, weekday)  %>% 
+  ggplot(aes(x = weekday, y = average_duration, fill = member_casual)) +
+  geom_col(position = "dodge")
+
+
+# STEP 5: EXPORT SUMMARY FILE FOR FURTHER ANALYSIS
+#=================================================
+Cyclistic_Analysis <- aggregate(all_trips_v2$tripduration ~ all_trips_v2$member_casual + all_trips_v2$day_of_week, FUN = mean)
+
+write.csv(Cyclistic_Analysis, "Cyclistic_Summary.csv")
